@@ -70,6 +70,10 @@ class pcd_to_pointcloud {
     std::string frame_id;
     // latched topic enabled/disabled
     bool latch;
+    // resize pointcloud by scale
+    double scale = 1.0;
+    // down size pointcloud by scale
+    double down_size_scale = 1.0;
     // pointcloud message and publisher
     sensor_msgs::PointCloud2 cloud;
     ros::Publisher pub;
@@ -108,6 +112,8 @@ public:
         interval = get_param("~interval", interval);
         frame_id = get_param("~frame_id", frame_id);
         latch = get_param("~latch", latch);
+        scale = get_param("~scale", scale);
+        down_size_scale = get_param("~down_size_scale", down_size_scale);
     }
 
     void parse_cmdline_args(int argc, char** argv) {
@@ -154,6 +160,8 @@ public:
         ROS_INFO_STREAM(" * frame_id: " << frame_id);
         ROS_INFO_STREAM(" * topic_name: " << cloud_topic);
         ROS_INFO_STREAM(" * latch: " << std::boolalpha << latch);
+        ROS_INFO_STREAM(" * scale: " << scale);
+        ROS_INFO_STREAM(" * down_size_scale: " << down_size_scale);
     }
 
     void print_data_info() {
@@ -161,6 +169,62 @@ public:
         ROS_INFO_STREAM(" * number of points: " << cloud.width * cloud.height);
         ROS_INFO_STREAM(" * total size [bytes]: " << cloud.data.size());
         ROS_INFO_STREAM(" * channel names: " << pcl::getFieldsList(cloud));
+    }
+
+    double get_scale() {
+        return scale;
+    }
+
+    bool try_resize_pointcloud() {
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr raw_cloud_(new pcl::PointCloud<pcl::PointXYZRGB>);
+        pcl::PointCloud<pcl::PointXYZRGB>::Ptr new_cloud_(new pcl::PointCloud<pcl::PointXYZRGB>);
+
+        pcl::fromROSMsg(cloud, *raw_cloud_);
+
+        if (down_size_scale < 1.0) {
+          //点群数を減らす場合
+          //点群の大きさを指定
+          new_cloud_->width = (int)ceil(raw_cloud_->width * down_size_scale);
+          new_cloud_->height = (int)ceil(raw_cloud_->height * down_size_scale);
+          new_cloud_->points.resize(new_cloud_->width * new_cloud_->height);
+          ROS_INFO_STREAM("Resize PointCloud");
+          ROS_INFO_STREAM("raw pcl::PointCloud size:"
+                          << raw_cloud_->width << ", " << raw_cloud_->height);
+          ROS_INFO_STREAM("new pcl::PointCloud size:"
+                          << new_cloud_->width << ", " << new_cloud_->height);
+
+          //点群の生成
+          if (scale < 1.0) {
+            for (size_t i = 0, ii = 0; i < new_cloud_->points.size();
+                 ii += int(1.0 / down_size_scale), i++) {
+              new_cloud_->points[i].x = raw_cloud_->points[ii].x * scale;
+              new_cloud_->points[i].y = raw_cloud_->points[ii].y * scale;
+              new_cloud_->points[i].z = raw_cloud_->points[ii].z * scale;
+              new_cloud_->points[i].rgb = raw_cloud_->points[ii].rgb;
+            }
+          }
+        } else {
+
+          //点群の大きさを指定
+          new_cloud_->width = (int)(raw_cloud_->width);
+          new_cloud_->height = (int)(raw_cloud_->height);
+          new_cloud_->points.resize(new_cloud_->width * new_cloud_->height);
+
+          //点群の生成
+          if (scale < 1.0) {
+            for (size_t i = 0; i < raw_cloud_->points.size(); i++) {
+              new_cloud_->points[i].x = raw_cloud_->points[i].x * scale;
+              new_cloud_->points[i].y = raw_cloud_->points[i].y * scale;
+              new_cloud_->points[i].z = raw_cloud_->points[i].z * scale;
+              new_cloud_->points[i].rgb = raw_cloud_->points[i].rgb;
+            }
+          }
+        }
+
+        pcl::toROSMsg(*new_cloud_, cloud);
+        cloud.header.frame_id = frame_id;
+
+        return true;
     }
 };
 
@@ -179,6 +243,12 @@ int main (int argc, char** argv) {
     // try to load pointcloud from file
     if (!node.try_load_pointcloud()) {
         return -1;
+    }
+    // try to resize point cloud
+    if (node.get_scale() != 1.0) {
+        if (!node.try_resize_pointcloud()) {
+            return -1;
+        }
     }
     // print info about pointcloud
     node.print_data_info();
